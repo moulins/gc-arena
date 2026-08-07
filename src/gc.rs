@@ -645,7 +645,6 @@ where
         ptr_meta: P::PtrMetadata,
     ) -> Self {
         let ptr = GcPtr::<T>::alloc::<TM, P>(ptr_meta);
-        ptr.header().set_needs_trace(T::NEEDS_TRACE);
 
         GcBuilder {
             ptr,

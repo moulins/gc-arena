@@ -51,6 +51,9 @@ impl<'gc, T: ?Sized + Collect<'gc>> GcPtr<T> {
         let (alloc_layout, value_offset) = prefix_header_layout(meta_header_layout, value_layout)
             .expect("no layout for GC allocation");
 
+        let header = GcHeader::new(&VtableFor::<T, TM, P>::VTABLE);
+        header.set_needs_trace(header.vtable().trace_value.is_some());
+
         unsafe {
             let block = alloc::alloc(alloc_layout).cast::<()>();
             let Some(block) = NonNull::new(block) else {
@@ -81,7 +84,7 @@ impl<'gc, T: ?Sized + Collect<'gc>> GcPtr<T> {
             );
 
             meta_ptr.write(ptr_meta);
-            header_ptr.write(GcHeader::new(&VtableFor::<T, TM, P>::VTABLE));
+            header_ptr.write(header);
 
             GcPtr(NonNull::new_unchecked(fat_ptr))
         }
@@ -182,7 +185,9 @@ impl<T: ?Sized> GcPtr<T> {
     /// The value must not have been dropped and the pointer must not have been deallocated.
     #[inline(always)]
     pub(crate) unsafe fn trace_value(self, cc: &mut Context) {
-        unsafe { (self.header().vtable().trace_value)(self.0.cast::<()>(), cc) }
+        if let Some(trace) = self.header().vtable().trace_value {
+            unsafe { trace(self.0.cast::<()>(), cc) }
+        }
     }
 
     /// Drops the stored value.
@@ -315,7 +320,8 @@ impl GcHeader {
 #[repr(align(16))]
 struct GcVtable {
     /// Traces the value at the given pointer.
-    trace_value: unsafe fn(NonNull<()>, &mut Context),
+    /// If None, the value doesn't need to be traced at all.
+    trace_value: Option<unsafe fn(NonNull<()>, &mut Context)>,
     /// Drops the value at the given pointer.
     drop_value: unsafe fn(NonNull<()>),
     /// Frees the allocation for given value pointer.
@@ -361,10 +367,14 @@ impl<'gc, T: ?Sized + Collect<'gc>, TM: TypeMeta, P: AllocMeta<T, TM::TypeMetada
     VtableFor<T, TM, P>
 {
     const VTABLE: GcVtable = GcVtable {
-        trace_value: |value_ptr, cc| unsafe {
-            PtrProps::<T, TM::TypeMetadata, P>::fat_ptr(TM::TYPE_METADATA, value_ptr)
-                .as_ref()
-                .trace(cc);
+        trace_value: if T::NEEDS_TRACE {
+            Some(|value_ptr, cc| unsafe {
+                PtrProps::<T, TM::TypeMetadata, P>::fat_ptr(TM::TYPE_METADATA, value_ptr)
+                    .as_ref()
+                    .trace(cc);
+            })
+        } else {
+            None
         },
         drop_value: |value_ptr| unsafe {
             ptr::drop_in_place(
