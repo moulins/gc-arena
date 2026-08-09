@@ -95,7 +95,7 @@ impl<'gc, H: Collect<'gc>, E: Collect<'gc>> GcSliceWithHeaderBuilder<'gc, H, E> 
     }
 }
 
-impl<'gc, H: Collect<'gc>, E: Collect<'gc>, M> GcSliceWithHeaderBuilder<'gc, H, E, M> {
+impl<'gc, H: Collect<'gc>, E: Collect<'gc>, M: 'static> GcSliceWithHeaderBuilder<'gc, H, E, M> {
     /// Create a new `GcSliceWithHeaderBuilder` with an uninitialized slice of length `len` and
     /// per-type metadata from `TM`.
     pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {
@@ -304,7 +304,7 @@ impl<'gc, E: Collect<'gc>> GcSliceBuilder<'gc, E> {
     }
 }
 
-impl<'gc, E: Collect<'gc>, M> GcSliceBuilder<'gc, E, M> {
+impl<'gc, E: Collect<'gc>, M: 'static> GcSliceBuilder<'gc, E, M> {
     /// Create a new `GcSliceBuilder` with an uninitialized slice of length `len` and per-type
     /// metadata from `TM`.
     pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {
@@ -402,7 +402,7 @@ impl<'gc> GcStrBuilder<'gc> {
     }
 }
 
-impl<'gc, M> GcStrBuilder<'gc, M> {
+impl<'gc, M: 'static> GcStrBuilder<'gc, M> {
     /// Create a new `GcStrBuilder` with an uninitialized str of length `len` and per-type metadata
     /// from `TM`.
     pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {

@@ -28,7 +28,7 @@ impl TypeMeta for UnitTypeMeta {
 /// This trait is necessary to implement for the garbage collector to drop unsized values, and can
 /// be used to convert `Gc` pointers into a "thin" representation.
 ///
-/// The [`PtrMeta::Metadata`] value will be stored next to the allocated value in memory, so there
+/// The [`PtrMeta::PtrMetadata`] value will be stored next to the allocated value in memory, so there
 /// is a *per-allocation* cost.
 ///
 /// # Safety
