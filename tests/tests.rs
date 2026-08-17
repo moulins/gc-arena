@@ -9,6 +9,7 @@ use gc_arena::{
     Arena, Collect, DynamicRootSet, Gc, GcBuilder, GcWeak, Lock, RefLock, Rootable,
     arena::CollectionPhase,
     collect::{DynCollect, dyn_collect},
+    meta::{Descriptor, TypeMeta},
     metrics::Pacing,
     static_collect, unsize,
 };
@@ -1550,14 +1551,14 @@ fn test_type_metadata() {
         #[collect(require_static)]
         struct TypeB(u32);
 
-        impl gc_arena::meta::TypeMeta for TypeA {
+        impl<'a> TypeMeta<'a, TypeA> for TypeA {
             type TypeMetadata = u32;
-            const TYPE_METADATA: &'static u32 = &7;
+            const DESC: &'a Descriptor<TypeA, u32> = &Descriptor::with(7);
         }
 
-        impl gc_arena::meta::TypeMeta for TypeB {
+        impl<'a> TypeMeta<'a, TypeB> for TypeB {
             type TypeMetadata = u32;
-            const TYPE_METADATA: &'static u32 = &8;
+            const DESC: &'a Descriptor<TypeB, u32> = &Descriptor::with(8);
         }
 
         let a = GcBuilder::new_with_type_meta::<TypeA>().write(mc, TypeA(7));
@@ -1582,18 +1583,18 @@ fn test_type_meta_same_types() {
 
         struct Locked;
 
-        impl gc_arena::meta::TypeMeta for Locked {
+        impl<'a> TypeMeta<'a, Object> for Locked {
             type TypeMetadata = IsLocked;
 
-            const TYPE_METADATA: &'static IsLocked = &IsLocked(true);
+            const DESC: &'a Descriptor<Object, IsLocked> = &Descriptor::with(IsLocked(true));
         }
 
         struct Unlocked;
 
-        impl gc_arena::meta::TypeMeta for Unlocked {
+        impl<'a> TypeMeta<'a, Object> for Unlocked {
             type TypeMetadata = IsLocked;
 
-            const TYPE_METADATA: &'static IsLocked = &IsLocked(false);
+            const DESC: &'a Descriptor<Object, IsLocked> = &Descriptor::with(IsLocked(false));
         }
 
         let obj_a = GcBuilder::new_with_type_meta::<Locked>().write(mc, Object(HashMap::new()));

@@ -1,4 +1,49 @@
-use core::alloc::Layout;
+use core::{alloc::Layout, marker::PhantomData};
+
+use crate::{collect::Collect, gc_ptr::GcVtable};
+
+// TODO: docs
+pub struct Descriptor<T: ?Sized, M: 'static = (), P = UnitPtrMeta> {
+    _marker: PhantomData<(P, T)>,
+    /// # Safety invariant
+    /// This vtable must be a valid implementation for the given `T, M, P` triple.
+    vtable: crate::gc_ptr::GcVtable<M>,
+}
+
+impl<T, M> Descriptor<T, M> {
+    #[inline]
+    pub const fn with<'gc>(type_meta: M) -> Self
+    where
+        T: Collect<'gc> + 'gc,
+    {
+        unsafe { Descriptor::custom(type_meta) }
+    }
+
+    // TODO: safe API for slices etc?
+}
+
+impl<T: ?Sized, M, P> Descriptor<T, M, P> {
+    // TODO: safety docs
+    #[inline]
+    pub const unsafe fn custom<'gc>(type_meta: M) -> Self
+    where
+        T: Collect<'gc> + 'gc,
+        P: AllocMeta<T, M>,
+    {
+        Descriptor {
+            _marker: PhantomData,
+            vtable: GcVtable::of::<T, P>(type_meta),
+        }
+    }
+}
+
+#[inline(always)]
+pub(crate) fn gc_vtable_ref_for_descriptor<'a, T: ?Sized + 'a, P: 'a, TM: TypeMeta<'a, T, P>>()
+-> &'static GcVtable<TM::TypeMetadata> {
+    let vtable = const { &TM::DESC.vtable };
+    // SAFETY: TODO lol
+    unsafe { &*(vtable as *const _) }
+}
 
 /// A trait which can instantiate per-type metadata for `Gc` pointers.
 ///
@@ -7,19 +52,19 @@ use core::alloc::Layout;
 ///
 /// The metadata pointer for allocated `Gc` values will be stored in a *per-type* static vtable (one
 /// vtable per (allocated type <-> metadata) pair), there is no per-allocation cost.
-pub trait TypeMeta {
+///
+/// TODO: update docs
+pub trait TypeMeta<'a, T: ?Sized + 'a, P: 'a = UnitPtrMeta> {
     type TypeMetadata: 'static;
-
-    const TYPE_METADATA: &'static Self::TypeMetadata;
+    const DESC: &'a Descriptor<T, Self::TypeMetadata, P>;
 }
 
 /// A trivial implementation of [`TypeMeta`] that sets the per-type metadata to `()` (unit).
 pub struct UnitTypeMeta;
 
-impl TypeMeta for UnitTypeMeta {
+impl<'gc, T: Collect<'gc> + 'gc, P: AllocMeta<T, ()> + 'gc> TypeMeta<'gc, T, P> for UnitTypeMeta {
     type TypeMetadata = ();
-
-    const TYPE_METADATA: &'static Self::TypeMetadata = &();
+    const DESC: &'gc Descriptor<T, (), P> = &unsafe { Descriptor::custom(()) };
 }
 
 /// A trait to describe pointers to unsized values and the *per-value* metadata stored in the GC

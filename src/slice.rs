@@ -9,7 +9,7 @@ use crate::{
     collect::Collect,
     context::Mutation,
     gc::{GcBuilder, GcFat, GcThin},
-    meta::{AllocMeta, PtrMeta, TypeMeta, UnitTypeMeta},
+    meta::{AllocMeta, Descriptor, PtrMeta, TypeMeta, UnitTypeMeta},
     static_wrapper::Static,
 };
 
@@ -53,9 +53,9 @@ impl<H, E> SliceWithHeader<H, E> {
     }
 }
 
-pub struct SliceWithHeaderPtrMeta;
+pub struct SlicePtrMeta;
 
-impl<H, E, M> PtrMeta<SliceWithHeader<H, E>, M> for SliceWithHeaderPtrMeta {
+impl<H, E, M> PtrMeta<SliceWithHeader<H, E>, M> for SlicePtrMeta {
     type PtrMetadata = usize;
     type Thin = H;
 
@@ -70,39 +70,50 @@ impl<H, E, M> PtrMeta<SliceWithHeader<H, E>, M> for SliceWithHeaderPtrMeta {
     }
 }
 
-impl<H, E, M> AllocMeta<SliceWithHeader<H, E>, M> for SliceWithHeaderPtrMeta {
+impl<H, E, M> AllocMeta<SliceWithHeader<H, E>, M> for SlicePtrMeta {
     #[inline]
     fn layout(_type_meta: &M, len: usize) -> Option<Layout> {
         SliceWithHeader::<H, E>::layout(len)
     }
 }
 
-pub type GcSliceWithHeader<'gc, H, E, M = ()> =
-    GcFat<'gc, SliceWithHeader<H, E>, M, SliceWithHeaderPtrMeta>;
+impl<'gc, H: Collect<'gc> + 'gc, E: Collect<'gc> + 'gc>
+    TypeMeta<'gc, SliceWithHeader<H, E>, SlicePtrMeta> for UnitTypeMeta
+{
+    type TypeMetadata = ();
+    const DESC: &'gc Descriptor<SliceWithHeader<H, E>, (), SlicePtrMeta> =
+        &unsafe { Descriptor::custom(()) };
+}
+
+pub type GcSliceWithHeader<'gc, H, E, M = ()> = GcFat<'gc, SliceWithHeader<H, E>, M, SlicePtrMeta>;
 
 pub type GcThinSliceWithHeader<'gc, H, E, M = ()> =
-    GcThin<'gc, SliceWithHeader<H, E>, M, SliceWithHeaderPtrMeta>;
+    GcThin<'gc, SliceWithHeader<H, E>, M, SlicePtrMeta>;
 
 /// Provides a way to construct a new `GcSliceWithHeader<H, E>`.
 pub struct GcSliceWithHeaderBuilder<'gc, H, E, M = ()> {
-    inner: GcBuilder<'gc, SliceWithHeader<H, E>, M, SliceWithHeaderPtrMeta>,
+    inner: GcBuilder<'gc, SliceWithHeader<H, E>, M, SlicePtrMeta>,
 }
 
-impl<'gc, H: Collect<'gc>, E: Collect<'gc>> GcSliceWithHeaderBuilder<'gc, H, E> {
+impl<'gc, H: Collect<'gc> + 'gc, E: Collect<'gc> + 'gc> GcSliceWithHeaderBuilder<'gc, H, E> {
     /// Create a new `GcSliceWithHeaderBuilder` with an uninitialized slice of length `len`.
     pub fn new(len: usize) -> Self {
         Self::new_with_type_meta::<UnitTypeMeta>(len)
     }
 }
 
-impl<'gc, H: Collect<'gc>, E: Collect<'gc>, M: 'static> GcSliceWithHeaderBuilder<'gc, H, E, M> {
+impl<'gc, H: Collect<'gc> + 'gc, E: Collect<'gc> + 'gc, M: 'static>
+    GcSliceWithHeaderBuilder<'gc, H, E, M>
+{
     /// Create a new `GcSliceWithHeaderBuilder` with an uninitialized slice of length `len` and
     /// per-type metadata from `TM`.
-    pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {
-        // SAFETY: `SliceWithHeaderPtrMeta` is implemented correctly for `SliceWithHeader` and not
-        // depend on any particular per-type metadata.
+    pub fn new_with_type_meta<
+        TM: TypeMeta<'gc, SliceWithHeader<H, E>, SlicePtrMeta, TypeMetadata = M>,
+    >(
+        len: usize,
+    ) -> Self {
         Self {
-            inner: unsafe { GcBuilder::new_with_type_and_ptr_meta::<TM>(len) },
+            inner: GcBuilder::new_with_type_and_ptr_meta::<TM>(len),
         }
     }
 }
@@ -150,7 +161,7 @@ impl<'gc, H, E, M> GcSliceWithHeaderBuilder<'gc, H, E, M> {
 
 /// Used to construct the slice portion of an in-construction `GcSliceWithHeader<H, E>`.
 pub struct GcSliceWithHeaderSliceBuilder<'gc, H, E, M = ()> {
-    inner: ManuallyDrop<GcBuilder<'gc, SliceWithHeader<H, E>, M, SliceWithHeaderPtrMeta>>,
+    inner: ManuallyDrop<GcBuilder<'gc, SliceWithHeader<H, E>, M, SlicePtrMeta>>,
     init_length: usize,
 }
 
@@ -270,8 +281,6 @@ impl<'gc, E: 'static + Copy> GcSlice<'gc, E> {
     }
 }
 
-pub struct SlicePtrMeta;
-
 impl<E, M> PtrMeta<[E], M> for SlicePtrMeta {
     type PtrMetadata = usize;
     type Thin = ();
@@ -294,21 +303,31 @@ impl<E, M> AllocMeta<[E], M> for SlicePtrMeta {
     }
 }
 
+impl<'gc, E: Collect<'gc> + 'gc> TypeMeta<'gc, [E], SlicePtrMeta> for UnitTypeMeta {
+    type TypeMetadata = ();
+    const DESC: &'gc Descriptor<[E], (), SlicePtrMeta> = &unsafe { Descriptor::custom(()) };
+}
+
 /// Provides a way to construct a new `GcSlice<E>`.
 pub struct GcSliceBuilder<'gc, E, M = ()>(GcSliceWithHeaderSliceBuilder<'gc, (), E, M>);
 
-impl<'gc, E: Collect<'gc>> GcSliceBuilder<'gc, E> {
+impl<'gc, E: Collect<'gc> + 'gc> GcSliceBuilder<'gc, E> {
     /// Create a new `GcSliceBuilder` with an uninitialized slice of length `len`.
     pub fn new(len: usize) -> Self {
-        Self(GcSliceWithHeaderBuilder::<(), E>::new(len).write_header(()))
+        Self::new_with_type_meta::<UnitTypeMeta>(len)
     }
 }
 
-impl<'gc, E: Collect<'gc>, M: 'static> GcSliceBuilder<'gc, E, M> {
+impl<'gc, E: Collect<'gc> + 'gc, M: 'static> GcSliceBuilder<'gc, E, M> {
     /// Create a new `GcSliceBuilder` with an uninitialized slice of length `len` and per-type
     /// metadata from `TM`.
-    pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {
-        Self(GcSliceWithHeaderBuilder::<(), E, M>::new_with_type_meta::<TM>(len).write_header(()))
+    pub fn new_with_type_meta<TM: TypeMeta<'gc, [E], SlicePtrMeta, TypeMetadata = M>>(
+        len: usize,
+    ) -> Self {
+        let builder = GcBuilder::<'gc, [E], M, SlicePtrMeta>::new_with_type_and_ptr_meta::<TM>(len);
+        let inner =
+            unsafe { GcBuilder::from_raw(builder.into_raw() as *mut SliceWithHeader<(), E>) };
+        Self(GcSliceWithHeaderBuilder { inner }.write_header(()))
     }
 }
 
@@ -359,8 +378,8 @@ impl<'gc, E: Copy, M> GcSliceBuilder<'gc, E, M> {
     }
 }
 
-pub type GcStr<'gc, M = ()> = GcFat<'gc, str, M, StrPtrMeta>;
-pub type GcThinStr<'gc, M = ()> = GcThin<'gc, str, M, StrPtrMeta>;
+pub type GcStr<'gc, M = ()> = GcFat<'gc, str, M, SlicePtrMeta>;
+pub type GcThinStr<'gc, M = ()> = GcThin<'gc, str, M, SlicePtrMeta>;
 
 impl<'gc> GcStr<'gc> {
     pub fn new_str(mc: &Mutation<'gc>, s: &str) -> GcStr<'gc> {
@@ -368,9 +387,7 @@ impl<'gc> GcStr<'gc> {
     }
 }
 
-pub struct StrPtrMeta;
-
-impl<M> PtrMeta<str, M> for StrPtrMeta {
+impl<M> PtrMeta<str, M> for SlicePtrMeta {
     type PtrMetadata = usize;
     type Thin = ();
 
@@ -385,7 +402,7 @@ impl<M> PtrMeta<str, M> for StrPtrMeta {
     }
 }
 
-impl<M> AllocMeta<str, M> for StrPtrMeta {
+impl<M> AllocMeta<str, M> for SlicePtrMeta {
     #[inline]
     fn layout(_type_meta: &M, len: usize) -> Option<Layout> {
         SliceWithHeader::<(), u8>::layout(len)
@@ -405,8 +422,15 @@ impl<'gc> GcStrBuilder<'gc> {
 impl<'gc, M: 'static> GcStrBuilder<'gc, M> {
     /// Create a new `GcStrBuilder` with an uninitialized str of length `len` and per-type metadata
     /// from `TM`.
-    pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>(len: usize) -> Self {
-        Self(GcSliceBuilder::<u8, M>::new_with_type_meta::<TM>(len))
+    pub fn new_with_type_meta<TM: TypeMeta<'gc, str, SlicePtrMeta, TypeMetadata = M>>(
+        len: usize,
+    ) -> Self {
+        let builder = GcBuilder::<'gc, str, M, SlicePtrMeta>::new_with_type_and_ptr_meta::<TM>(len);
+        let inner =
+            unsafe { GcBuilder::from_raw(builder.into_raw() as *mut SliceWithHeader<(), u8>) };
+        Self(GcSliceBuilder(
+            GcSliceWithHeaderBuilder { inner }.write_header(()),
+        ))
     }
 }
 

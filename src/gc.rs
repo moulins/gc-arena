@@ -11,7 +11,7 @@ use crate::{
     barrier::{Unlock, Write},
     collect::{Collect, Trace},
     context::{Finalization, Mutation},
-    gc_ptr::{GcPtr, GcVtable},
+    gc_ptr::GcPtr,
     gc_weak::GcWeak,
     meta::{AllocMeta, PtrMeta, TypeMeta, UnitPtrMeta, UnitTypeMeta},
     static_wrapper::{Static, StaticPtrMeta},
@@ -298,8 +298,10 @@ where
     /// The `K` kind parameter may be changed here and MUST be "compatible" with the original GcKind
     /// used to allocate the `ptr`.
     ///
-    /// To be "compatible" means that for both the per-type and per-value metadata types, you can
-    /// dereference a (valid, dereferenceble) pointer to the old type `*const Old` as `*const New`.
+    /// To be "compatible" means that for both the per-type and per-value metadata types, either:
+    /// - the new type is `()`, which is trivially compatible with anything;
+    /// - the old value must be valid at the new type (similarly to [`mem::transmute`], and the old
+    ///   and new types must have the same layout (size and alignment).
     ///
     /// Additionally, if the `P` parameter within the `GcKind` implements `PtrMeta<T>`, the
     /// implementation must be correct for the existing per-type metadata (cast to its new type) and
@@ -434,8 +436,7 @@ where
     /// Retrieve the *per-type* metadata specified when a `Gc` was allocated.
     #[inline]
     pub fn type_metadata(gc: Gc<'gc, T, GcKind<S, M, P>>) -> &'static M {
-        // NOTE: see the hacky adapter in `GcBuilder::new_with_type_and_ptr_meta`
-        let vtable = unsafe { gc.ptr.header().typed_vtable::<&'static M>() };
+        let vtable = unsafe { gc.ptr.header().typed_vtable::<M>() };
         &vtable.type_meta
     }
 }
@@ -610,7 +611,7 @@ impl<'gc, T: ?Sized, M, P> Drop for GcBuilder<'gc, T, M, P> {
     }
 }
 
-impl<'gc, T: Collect<'gc>> GcBuilder<'gc, T> {
+impl<'gc, T: Collect<'gc> + 'gc> GcBuilder<'gc, T> {
     /// Create a new `GcBuilder` suitable for building a `Gc` pointer to a *sized* `T`.
     pub fn new() -> Self {
         GcBuilder::new_with_type_meta::<UnitTypeMeta>()
@@ -619,66 +620,31 @@ impl<'gc, T: Collect<'gc>> GcBuilder<'gc, T> {
 
 impl<'gc, T, M: 'static> GcBuilder<'gc, T, M, UnitPtrMeta>
 where
-    T: Collect<'gc>,
+    T: Collect<'gc> + 'gc,
 {
     /// Create a new `GcBuilder` suitable for building a `Gc` pointer to a *sized* `T` with the
     /// *per-type* metadata from `TM`.
     ///
     /// The `TM::METADATA` pointer will be stored in the static *per-type* vtable so there is no
     /// per-allocation cost, but there is one vtable per `T` <-> `TM` pair.
-    pub fn new_with_type_meta<TM: TypeMeta<TypeMetadata = M>>() -> Self {
-        unsafe { Self::new_with_type_and_ptr_meta::<TM>(()) }
+    pub fn new_with_type_meta<TM: TypeMeta<'gc, T, TypeMetadata = M>>() -> Self {
+        Self::new_with_type_and_ptr_meta::<TM>(())
     }
 }
 
 impl<'gc, T: ?Sized, M: 'static, P> GcBuilder<'gc, T, M, P>
 where
-    T: Collect<'gc>,
-    P: AllocMeta<T, M>,
+    T: Collect<'gc> + 'gc,
+    P: AllocMeta<T, M> + 'gc,
 {
     /// Create a new `GcBuilder` suitable for building a `Gc` pointer to a (potentially *unsized*)
     /// `T` with per-type metadata from `TM` and the given `ptr_meta` per-value metadata.
-    ///
-    /// # Safety
-    ///
-    /// Using this method requires asserting that `P: AllocMeta` is correctly implemented for the
-    /// `TM::METADATA` being used to create the `Gc`.
-    pub unsafe fn new_with_type_and_ptr_meta<TM: TypeMeta<TypeMetadata = M>>(
+    pub fn new_with_type_and_ptr_meta<TM: TypeMeta<'gc, T, P, TypeMetadata = M>>(
         ptr_meta: P::PtrMetadata,
     ) -> Self {
-        // Temporary adapter to bolt the current public API onto the new internals
-        struct ByRef<P>(core::marker::PhantomData<P>);
-
-        impl<T: ?Sized, M: 'static, P: PtrMeta<T, M>> PtrMeta<T, &'static M> for ByRef<P> {
-            type PtrMetadata = P::PtrMetadata;
-            type Thin = P::Thin;
-            #[inline]
-            fn to_thin(type_meta: &&'static M, fat: *const T) -> *const Self::Thin {
-                P::to_thin(*type_meta, fat)
-            }
-            #[inline]
-            fn from_thin(
-                type_meta: &&'static M,
-                thin: *const Self::Thin,
-                ptr_meta: Self::PtrMetadata,
-            ) -> *const T {
-                P::from_thin(*type_meta, thin, ptr_meta)
-            }
-        }
-
-        impl<T: ?Sized, M: 'static, P: AllocMeta<T, M>> AllocMeta<T, &'static M> for ByRef<P> {
-            #[inline]
-            fn layout(
-                type_meta: &&'static M,
-                ptr_meta: Self::PtrMetadata,
-            ) -> Option<alloc::alloc::Layout> {
-                P::layout(*type_meta, ptr_meta)
-            }
-        }
-
-        let vtable = &const { GcVtable::<&'static M>::of::<T, ByRef<P>>(TM::TYPE_METADATA) };
+        let vtable = crate::meta::gc_vtable_ref_for_descriptor::<'gc, T, P, TM>();
         // SAFETY: the vtable's type parameters match.
-        let ptr = unsafe { GcPtr::<T>::alloc::<&'static M, ByRef<P>>(ptr_meta, vtable) };
+        let ptr = unsafe { GcPtr::<T>::alloc::<M, P>(ptr_meta, vtable) };
 
         GcBuilder {
             ptr,
